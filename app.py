@@ -4,125 +4,119 @@ import pandas as pd
 import random
 import smtplib
 import ssl
-import time
 from email.message import EmailMessage
 
-# --- PAGE SETUP ---
-st.set_page_config(page_title="Nebula Messenger", page_icon="🌌", layout="centered")
+# --- PAGE CONFIG ---
+st.set_page_config(page_title="Nebula Messenger", page_icon="🌌")
 
 # --- DATABASE CONNECTION ---
 conn = st.connection("gsheets", type=GSheetsConnection)
 
-# --- CSS STYLING (Glassmorphism) ---
+# --- CSS ---
 st.markdown("""
 <style>
     .stApp { background: radial-gradient(circle at top, #1a0b2e, #09090b); color: white; }
-    .glass-card {
-        background: rgba(255, 255, 255, 0.05); backdrop-filter: blur(15px);
-        border-radius: 15px; padding: 20px; border: 1px solid rgba(255, 255, 255, 0.1);
-        margin-bottom: 10px;
-    }
-    .chat-bubble {
-        padding: 10px 15px; border-radius: 15px; margin-bottom: 10px;
-        background: rgba(138, 43, 226, 0.2); border: 0.5px solid rgba(138, 43, 226, 0.3);
-    }
+    .glass-card { background: rgba(255, 255, 255, 0.05); padding: 25px; border-radius: 15px; border: 1px solid rgba(255,255,255,0.1); }
 </style>
 """, unsafe_allow_html=True)
 
-# --- HELPER FUNCTIONS ---
+# --- OTP FUNCTION (With Detailed Error Feedback) ---
 def send_otp(target_email):
     otp = str(random.randint(100000, 999999))
-    sender = st.secrets["GMAIL_USER"].strip()
-    pw = st.secrets["GMAIL_PASS"].strip().replace(" ", "")
-    msg = EmailMessage()
-    msg.set_content(f"Nebula Chat OTP: {otp}")
-    msg['Subject'] = 'Nebula Verification'
-    msg['From'] = sender
-    msg['To'] = target_email
-    context = ssl.create_default_context()
     try:
+        sender = st.secrets["GMAIL_USER"].strip()
+        pw = st.secrets["GMAIL_PASS"].strip().replace(" ", "")
+        
+        msg = EmailMessage()
+        msg.set_content(f"Nebula Chat OTP Code: {otp}")
+        msg['Subject'] = 'Verification Code'
+        msg['From'] = sender
+        msg['To'] = target_email
+        
+        context = ssl.create_default_context()
         with smtplib.SMTP_SSL("smtp.gmail.com", 465, context=context) as server:
             server.login(sender, pw)
             server.send_message(msg)
             return otp
-    except: return None
+    except Exception as e:
+        # ဘာကြောင့် OTP ပို့မရလဲဆိုတာကို ပြပေးမယ်
+        st.error(f"OTP ပို့လို့မရပါ- {str(e)}")
+        return None
 
-# --- APP NAVIGATION ---
+# --- NAVIGATION ---
 if "page" not in st.session_state: st.session_state.page = "welcome"
 
-# 1. Welcome Screen
 if st.session_state.page == "welcome":
-    st.markdown("<h1 style='text-align:center;'>🌌 Nebula Messenger</h1>", unsafe_allow_html=True)
+    st.title("🌌 Nebula Messenger")
     if st.button("Get Started", use_container_width=True):
         st.session_state.page = "auth_choice"
         st.rerun()
 
-# 2. Auth Choice
 elif st.session_state.page == "auth_choice":
-    st.markdown("<div class='glass-card'>", unsafe_allow_html=True)
     if st.button("Sign In (Login)", use_container_width=True):
         st.session_state.page = "login"
         st.rerun()
-    st.write("")
     if st.button("Sign Up (New Account)", use_container_width=True):
         st.session_state.page = "signup"
         st.rerun()
-    st.markdown("</div>", unsafe_allow_html=True)
 
-# 3. Sign Up
 elif st.session_state.page == "signup":
-    st.subheader("Create New Account")
+    st.subheader("📝 Sign Up")
     email = st.text_input("Gmail Address")
+    
+    # OTP ပို့ပြီး/မပြီး အခြေအနေကို စစ်ဆေးခြင်း
     if "otp_sent" not in st.session_state:
         if st.button("Send OTP"):
-            res = send_otp(email)
-            if res:
-                st.session_state.gen_otp, st.session_state.otp_sent = res, True
-                st.success("OTP Sent!")
-                st.rerun()
+            if email:
+                with st.spinner("OTP ပို့နေသည်..."):
+                    res = send_otp(email)
+                    if res:
+                        st.session_state.gen_otp = res
+                        st.session_state.otp_sent = True
+                        st.success("OTP ပို့ပြီးပါပြီ။ Gmail ကို စစ်ဆေးပါ။")
+                        time_to_wait = 2 # စာသားပြဖို့ ခဏစောင့်မယ်
+                        st.rerun()
+            else:
+                st.warning("Email အရင်ရိုက်ပါ။")
     else:
-        u_otp = st.text_input("OTP Code")
+        # OTP ပို့ပြီးမှ ပေါ်လာမည့် input များ
+        u_otp = st.text_input("Enter OTP Code")
         u_id = st.text_input("Username (@id)")
         d_name = st.text_input("Display Name")
         pw = st.text_input("Password", type="password")
-        if st.button("Register"):
+        
+        if st.button("Register Account"):
             if u_otp == st.session_state.gen_otp:
-                # User DB အား Sheet ထဲထည့်ခြင်း
-                df = conn.read(worksheet="Sheet1")
-                new_user = pd.DataFrame([{"email": email, "username": u_id, "display_name": d_name, "password": pw}])
-                updated_df = pd.concat([df, new_user], ignore_index=True)
-                conn.update(worksheet="Sheet1", data=updated_df)
-                st.success("Account Created! Please Login.")
-                st.session_state.page = "login"
-                st.rerun()
+                try:
+                    df = conn.read()
+                    new_user = pd.DataFrame([{"email": email, "username": u_id, "display_name": d_name, "password": pw}])
+                    updated_df = pd.concat([df, new_user], ignore_index=True)
+                    conn.update(data=updated_df)
+                    st.success("Registration အောင်မြင်ပါသည်။ Login ဝင်ပါ။")
+                    st.session_state.page = "login"
+                    del st.session_state.otp_sent # OTP status ကို reset ချမယ်
+                    st.rerun()
+                except Exception as e:
+                    st.error(f"Database Error: {e}")
+            else:
+                st.error("OTP ကုဒ် မှားယွင်းနေပါသည်။")
 
-# 4. Login
 elif st.session_state.page == "login":
-    st.subheader("Sign In")
+    st.subheader("🔐 Login")
     l_user = st.text_input("Username")
     l_pass = st.text_input("Password", type="password")
     if st.button("Login"):
-        data = conn.read(worksheet="Sheet1")
+        data = conn.read()
         user_row = data[data['username'] == l_user]
         if not user_row.empty and str(user_row.iloc[0]['password']) == l_pass:
             st.session_state.user = user_row.iloc[0].to_dict()
-            st.session_state.page = "chat"
+            st.session_state.page = "main_chat"
             st.rerun()
-        else: st.error("Wrong credentials")
+        else:
+            st.error("Username သို့မဟုတ် Password မှားနေပါသည်။")
 
-# 5. Chat Room
-elif st.session_state.page == "chat":
-    st.sidebar.title(f"Hi, {st.session_state.user['display_name']}")
-    if st.sidebar.button("Logout"):
+elif st.session_state.page == "main_chat":
+    st.success(f"Welcome {st.session_state.user['display_name']}!")
+    if st.button("Logout"):
         st.session_state.page = "welcome"
         st.rerun()
-
-    st.title("💬 Global Nebula Chat")
-    
-    # Message များကို Sheet 2 (သို့မဟုတ်) Sheet တစ်ခုတည်းမှာ သိမ်းနိုင်သည်
-    # ဤနေရာတွင် ရိုးရှင်းစေရန် Chat System ကို ထည့်သွင်းထားသည်
-    msg_input = st.chat_input("စာရိုက်ရန်...")
-    if msg_input:
-        # ဤနေရာတွင် Message ကို Database ထဲလှမ်းသိမ်းရမည်
-        st.write(f"**You:** {msg_input}")
-        st.toast("Message sent!")
