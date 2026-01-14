@@ -11,12 +11,10 @@ from email.message import EmailMessage
 st.set_page_config(page_title="Nebula Messenger", page_icon="🌌", layout="centered")
 
 # --- DATABASE CONNECTION ---
-# Connection အမှားမတက်အောင် try-except နဲ့ စစ်ပါမယ်
-try:
-    conn = st.connection("gsheets", type=GSheetsConnection)
-except Exception as e:
-    st.error("Database ချိတ်ဆက်မှု Error တက်နေပါသည်။ Secrets ထဲက Format ကို ပြန်စစ်ပါ။")
-    st.stop()
+# Sheet link ကို တိုက်ရိုက်သတ်မှတ်ပေးခြင်းဖြင့် Error ကို လျှော့ချပါမယ်
+SHEET_URL = "https://docs.google.com/spreadsheets/d/1aQvBwZ-ucJNlGNFiuS5ep60mvD5ezWzqOM2g0ZOH6S0/edit?usp=sharing"
+
+conn = st.connection("gsheets", type=GSheetsConnection)
 
 # --- CSS STYLING ---
 st.markdown("""
@@ -49,17 +47,15 @@ def send_otp(target_email):
         st.error(f"Gmail Error: {str(e)}")
         return None
 
-# --- APP NAVIGATION ---
+# --- APP FLOW ---
 if "page" not in st.session_state: st.session_state.page = "welcome"
 
-# 1. Welcome
 if st.session_state.page == "welcome":
     st.markdown("<h1 style='text-align:center;'>🌌 Nebula Messenger</h1>", unsafe_allow_html=True)
     if st.button("စတင်အသုံးပြုမည်", use_container_width=True):
         st.session_state.page = "auth_choice"
         st.rerun()
 
-# 2. Auth Choice
 elif st.session_state.page == "auth_choice":
     st.markdown("<div class='glass-card'>", unsafe_allow_html=True)
     if st.button("Sign In (Login)", use_container_width=True):
@@ -71,7 +67,6 @@ elif st.session_state.page == "auth_choice":
         st.rerun()
     st.markdown("</div>", unsafe_allow_html=True)
 
-# 3. Sign Up
 elif st.session_state.page == "signup":
     st.subheader("📝 Sign Up")
     email = st.text_input("Gmail")
@@ -79,13 +74,11 @@ elif st.session_state.page == "signup":
     if "otp_sent" not in st.session_state:
         if st.button("Send OTP"):
             if "@gmail.com" in email:
-                with st.spinner("OTP ပို့နေသည်..."):
-                    res = send_otp(email)
-                    if res:
-                        st.session_state.gen_otp, st.session_state.otp_sent = res, True
-                        st.success("OTP ပို့ပြီးပါပြီ။ Gmail ကိုစစ်ပါ။")
-                        st.rerun()
-            else: st.error("Gmail အမှန်ရိုက်ပါ။")
+                res = send_otp(email)
+                if res:
+                    st.session_state.gen_otp, st.session_state.otp_sent = res, True
+                    st.success("OTP ပို့ပြီးပါပြီ။")
+                    st.rerun()
     else:
         u_otp = st.text_input("Enter OTP")
         u_id = st.text_input("Username")
@@ -95,10 +88,16 @@ elif st.session_state.page == "signup":
         if st.button("Register Account"):
             if u_otp == st.session_state.gen_otp:
                 try:
-                    df = conn.read()
-                    new_user = pd.DataFrame([{"email": email, "username": u_id, "display_name": d_name, "password": pw}])
-                    updated_df = pd.concat([df, new_user], ignore_index=True)
-                    conn.update(data=updated_df)
+                    # Database ဖတ်ခြင်း
+                    df = conn.read(spreadsheet=SHEET_URL)
+                    
+                    # Data အသစ်ထည့်ခြင်း
+                    new_row = pd.DataFrame([{"email": email, "username": u_id, "display_name": d_name, "password": pw}])
+                    updated_df = pd.concat([df, new_row], ignore_index=True)
+                    
+                    # Database အား Update လုပ်ခြင်း
+                    conn.update(spreadsheet=SHEET_URL, data=updated_df)
+                    
                     st.success("အောင်မြင်ပါပြီ။ Login ဝင်ပါ။")
                     time.sleep(2)
                     st.session_state.page = "login"
@@ -108,31 +107,27 @@ elif st.session_state.page == "signup":
                     st.error(f"Database Error: {e}")
             else: st.error("OTP မှားနေပါသည်။")
 
-# 4. Login
 elif st.session_state.page == "login":
     st.subheader("🔐 Login")
     l_user = st.text_input("Username")
     l_pass = st.text_input("Password", type="password")
     
     if st.button("Login"):
-        data = conn.read()
-        user_row = data[data['username'] == l_user]
-        if not user_row.empty and str(user_row.iloc[0]['password']) == l_pass:
-            st.session_state.user = user_row.iloc[0].to_dict()
-            st.session_state.page = "chat_room"
-            st.rerun()
-        else: st.error("မှားယွင်းနေပါသည်။")
+        data = conn.read(spreadsheet=SHEET_URL)
+        # username column ရှိမရှိ စစ်ဆေးခြင်း
+        if 'username' in data.columns:
+            user_row = data[data['username'] == l_user]
+            if not user_row.empty and str(user_row.iloc[0]['password']) == l_pass:
+                st.session_state.user = user_row.iloc[0].to_dict()
+                st.session_state.page = "chat"
+                st.rerun()
+            else: st.error("မှားယွင်းနေပါသည်။")
+        else: st.error("Database Error: Column headers are missing in Google Sheet.")
 
-# 5. Global Chat Room (Basic Messaging Added)
-elif st.session_state.page == "chat_room":
+elif st.session_state.page == "chat":
     st.title("💬 Global Chat")
     st.sidebar.write(f"Logged in as: {st.session_state.user['display_name']}")
     if st.sidebar.button("Logout"):
         st.session_state.page = "welcome"
         st.rerun()
-
-    # Chat messages များကို ယာယီပြသခြင်း (နောက်ပိုင်းတွင် DB ထဲသိမ်းပါမည်)
-    st.info("Messaging system is now active.")
-    chat_input = st.chat_input("စာရိုက်ပါ...")
-    if chat_input:
-        st.chat_message("user").write(f"**{st.session_state.user['display_name']}:** {chat_input}")
+    st.chat_input("စာရိုက်ပါ...")
