@@ -2,8 +2,8 @@ import streamlit as st
 import requests
 
 # Token တွေကို Secrets ထဲကနေ လှမ်းယူမယ်
-BOT_TOKEN = st.secrets["BOT_TOKEN"]
-CHAT_ID = st.secrets["CHAT_ID"]
+BOT_TOKEN = st.secrets["8509711435:AAFWcJbG0rZumpsxOgdaPOK4p4IW9kmGzVU"]
+CHAT_ID = st.secrets["1003271238644"]
 
 st.set_page_config(page_title="Z-Chat Messenger", page_icon="💬")
 
