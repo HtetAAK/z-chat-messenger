@@ -1,179 +1,112 @@
 import streamlit as st
-from streamlit_gsheets import GSheetsConnection
-import pandas as pd
-from datetime import datetime
-import requests
-import time
+import random
+import smtplib
+import re
+import json
+import asyncio
+from telethon import TelegramClient
+from email.message import EmailMessage
 
-# --- Database & Config ---
-conn = st.connection("gsheets", type=GSheetsConnection)
+# --- CONFIG & SECRETS (Streamlit Cloud ရဲ့ Secrets ထဲမှာ ထည့်ရမယ့် အချက်အလက်များ) ---
+API_ID = st.secrets["API_ID"]
+API_HASH = st.secrets["API_HASH"]
 BOT_TOKEN = st.secrets["BOT_TOKEN"]
-CHAT_ID = st.secrets["CHAT_ID"]
+CHANNEL_ID = int(st.secrets["CHANNEL_ID"])
+GMAIL_USER = st.secrets["GMAIL_USER"]
+GMAIL_PASS = st.secrets["GMAIL_PASS"]
 
-st.set_page_config(page_title="Z-Chat Premium", page_icon="⚡", layout="wide")
+client = TelegramClient('bot_session', API_ID, API_HASH)
 
-# --- Custom UI Styling (ခပ်မိုက်မိုက် Dark Mode) ---
+# --- CSS STYLING ---
 st.markdown("""
-    <style>
-    .stApp { background-color: #0b0e14; color: #e0e0e0; }
-    [data-testid="stSidebar"] { background-color: #151921; border-right: 1px solid #2d343f; }
-    .stButton>button { width: 100%; border-radius: 8px; background-color: #3d5afe; color: white; border: none; }
-    .stTextInput>div>div>input { background-color: #1e2530; color: white; border: 1px solid #3d4756; border-radius: 8px; }
-    .chat-bubble { padding: 12px; border-radius: 15px; margin-bottom: 10px; max-width: 80%; }
-    .my-msg { background-color: #3d5afe; align-self: flex-end; margin-left: auto; }
-    .their-msg { background-color: #262c38; }
-    </style>
-    """, unsafe_allow_html=True)
+<style>
+    .stApp { background-color: #0E1117; color: white; }
+    .stButton>button {
+        background: linear-gradient(90deg, #8A2BE2 0%, #4B0082 100%);
+        color: white; border-radius: 12px; height: 3em; border: none; width: 100%;
+    }
+</style>
+""", unsafe_allow_html=True)
 
-# --- Login & Profile Logic ---
-if "logged_in" not in st.session_state:
-    st.title("⚡ Welcome to Z-Chat")
-    tab1, tab2 = st.tabs(["Login", "About"])
-    
-    with tab1:
-        u_name = st.text_input("Username (ပြသရန်အမည်)")
-        u_id = st.text_input("User ID (Unique ID - ဥပမာ: ark123)")
-        if st.button("Start Chatting"):
-            if u_name and u_id:
-                st.session_state.username = u_name
-                st.session_state.my_id = u_id.lower().strip()
-                st.session_state.logged_in = True
+# --- FUNCTIONS ---
+def send_otp(target_email):
+    otp = str(random.randint(100000, 999999))
+    msg = EmailMessage()
+    msg.set_content(f"သင်၏ Nebula Chat Verify Code မှာ {otp} ဖြစ်ပါသည်။")
+    msg['Subject'] = 'Nebula Chat Verification'
+    msg['From'] = GMAIL_USER
+    msg['To'] = target_email
+    with smtplib.SMTP_SSL('smtp.gmail.com', 465) as smtp:
+        smtp.login(GMAIL_USER, GMAIL_PASS)
+        smtp.send_message(msg)
+    return otp
+
+async def save_user_to_tg(user_data):
+    await client.start(bot_token=BOT_TOKEN)
+    await client.send_message(CHANNEL_ID, f"USER_DB:{json.dumps(user_data)}")
+
+async def check_user_exists(username):
+    await client.start(bot_token=BOT_TOKEN)
+    async for msg in client.iter_messages(CHANNEL_ID):
+        if msg.text and msg.text.startswith("USER_DB:"):
+            data = json.loads(msg.text.split("USER_DB:")[1])
+            if data['username'] == username: return data
+    return None
+
+# --- APP FLOW ---
+if "page" not in st.session_state: st.session_state.page = "welcome"
+
+if st.session_state.page == "welcome":
+    st.markdown("<h1 style='text-align: center;'>🌌 Nebula Chat</h1>", unsafe_allow_html=True)
+    st.write("---")
+    st.write("### မင်္ဂလာပါ! Nebula မှ ကြိုဆိုပါသည်။")
+    if st.button("စတင်အသုံးပြုမည်"):
+        st.session_state.page = "auth_choice"
+        st.rerun()
+
+elif st.session_state.page == "auth_choice":
+    if st.button("Sign In (Login)"): 
+        st.session_state.page = "login"
+        st.rerun()
+    if st.button("Sign Up (New Account)"): 
+        st.session_state.page = "signup"
+        st.rerun()
+
+elif st.session_state.page == "signup":
+    st.subheader("📝 Register")
+    email = st.text_input("Gmail Address")
+    if "otp_sent" not in st.session_state:
+        if st.button("OTP ပို့မည်"):
+            st.session_state.generated_otp = send_otp(email)
+            st.session_state.otp_sent = True
+            st.rerun()
+    else:
+        u_otp = st.text_input("OTP ရိုက်ပါ")
+        u_name = st.text_input("User Name")
+        d_name = st.text_input("Display Name")
+        pw = st.text_input("Password", type="password")
+        if st.button("Confirm Register"):
+            if u_otp == st.session_state.generated_otp:
+                user_data = {"username": u_name, "display_name": d_name, "password": pw}
+                asyncio.run(save_user_to_tg(user_data))
+                st.session_state.page = "login"
                 st.rerun()
-            else:
-                st.warning("အချက်အလက် အကုန်ဖြည့်ပါ။")
-    st.stop()
 
-# --- Sidebar (Profile & Contacts) ---
-with st.sidebar:
-    st.title("⚙️ Profile")
-    if st.toggle("Edit Profile"):
-        new_name = st.text_input("Edit Name", value=st.session_state.username)
-        if st.button("Save Changes"):
-            st.session_state.username = new_name
-            st.success("Updated!")
+elif st.session_state.page == "login":
+    st.subheader("🔐 Login")
+    l_user = st.text_input("Username")
+    l_pass = st.text_input("Password", type="password")
+    if st.button("Login"):
+        user = asyncio.run(check_user_exists(l_user))
+        if user and user['password'] == l_pass:
+            st.session_state.user = user
+            st.session_state.page = "chat_main"
             st.rerun()
-    else:
-        st.write(f"**Name:** {st.session_state.username}")
-        st.write(f"**ID:** @{st.session_state.my_id}")
-    
-    st.divider()
-    target_id = st.text_input("🔍 Chat with (Enter User ID)", placeholder="e.g. user789").lower().strip()
-    
-    if st.button("🚪 Logout"):
-        st.session_state.clear()
-        st.rerun()
+        else: st.error("မှားယွင်းနေပါသည်။")
 
-# --- Chat Interface ---
-st.title(f"💬 Chat: {target_id if target_id else 'Select a User'}")
-
-try:
-    df = conn.read(ttl=2)
-except:
-    df = pd.DataFrame(columns=["from", "to", "message", "time", "sender_name"])
-
-if target_id:
-    # Filter Messages
-    mask = (
-        ((df["from"] == st.session_state.my_id) & (df["to"] == target_id)) |
-        ((df["from"] == target_id) & (df["to"] == st.session_state.my_id))
-    )
-    chat_history = df[mask]
-
-    # Show Messages
-    chat_container = st.container()
-    with chat_container:
-        for _, row in chat_history.iterrows():
-            is_me = row["from"] == st.session_state.my_id
-            div_class = "my-msg" if is_me else "their-msg"
-            st.markdown(f"""
-                <div class="chat-bubble {div_class}">
-                    <small style="color: #adb5bd;">{row['sender_name']} • {row['time']}</small><br>
-                    {row['message']}
-                </div>
-                """, unsafe_allow_html=True)
-
-    # Send Message
-    if prompt := st.chat_input("Write a message..."):
-        new_row = pd.DataFrame([{
-            "from": st.session_state.my_id,
-            "to": target_id,
-            "message": prompt,
-            "time": datetime.now().strftime("%H:%M"),
-            "sender_name": st.session_state.username
-        }])
-        updated_df = pd.concat([df, new_row], ignore_index=True)
-        conn.update(data=updated_df)
-        
-        # Telegram Log
-        log = f"🚀 {st.session_state.username} (@{st.session_state.my_id}) -> {target_id}: {prompt}"
-        requests.post(f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage", json={"chat_id": CHAT_ID, "text": log})
-        st.rerun()
-else:
-    st.info("ဘယ်ဘက်မှာ သင်စကားပြောချင်တဲ့သူရဲ့ ID ကိုရိုက်ပြီး Chat ကိုစတင်ပါ။")
-
-time.sleep(4)
-st.rerun()
-    st.sidebar.title(f"👤 {st.session_state.my_id}")
-    target_id = st.sidebar.text_input("စကားပြောမည့်သူ၏ ID", placeholder="Receiver ID")
-    
+elif st.session_state.page == "chat_main":
+    st.sidebar.write(f"Logged in as: {st.session_state.user['display_name']}")
+    st.write("### Chat စနစ်သို့ ရောက်ရှိသွားပါပြီ။")
     if st.sidebar.button("Logout"):
-        del st.session_state.my_id
+        st.session_state.page = "welcome"
         st.rerun()
-
-    st.title(f"💬 Chat: {target_id if target_id else '...'}")
-
-    # --- Read Database ---
-    try:
-        # ၂ စက္ကန့်တိုင်း အသစ်စစ်ရန် (ttl=2)
-        df = conn.read(ttl=2)
-    except:
-        df = pd.DataFrame(columns=["from", "to", "message", "time"])
-
-    # --- Display Messages ---
-    if target_id:
-        # ကိုယ်နဲ့ တစ်ဖက်လူ ပြောထားတဲ့စာတွေကိုပဲ စစ်ထုတ်ယူမယ်
-        mask = (
-            ((df["from"] == st.session_state.my_id) & (df["to"] == target_id)) |
-            ((df["from"] == target_id) & (df["to"] == st.session_state.my_id))
-        )
-        chat_history = df[mask]
-
-        for _, row in chat_history.iterrows():
-            role = "user" if row["from"] == st.session_state.my_id else "assistant"
-            with st.chat_message(role):
-                st.write(f"**{row['from']}**: {row['message']}")
-
-        # --- Send Message ---
-        if prompt := st.chat_input("မက်ဆေ့ချ် ရေးပါ..."):
-            # ၁။ Google Sheet ထဲ သိမ်းရန်
-            new_row = pd.DataFrame([{
-                "from": st.session_state.my_id,
-                "to": target_id,
-                "message": prompt,
-                "time": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-            }])
-            updated_df = pd.concat([df, new_row], ignore_index=True)
-            conn.update(data=updated_df)
-            
-            # ၂။ Telegram ဆီ Admin အနေနဲ့ ပို့ရန်
-            log_msg = f"📩 {st.session_state.my_id} -> {target_id}: {prompt}"
-            requests.post(f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage", 
-                          json={"chat_id": CHAT_ID, "text": log_msg})
-            
-            st.rerun()
-    else:
-        st.info("ဘယ်ဘက် Sidebar မှာ သင်စကားပြောချင်တဲ့သူရဲ့ ID ကို အရင်ရိုက်ထည့်ပါ။")
-
-    # အလိုအလျောက် Update ဖြစ်စေရန်
-    time.sleep(3)
-    st.rerun()
-    if prompt := st.chat_input("စာရိုက်ပါ..."):
-        st.session_state.messages.append({"user": st.session_state.username, "text": prompt})
-        
-        # Telegram API သို့ ပို့ခြင်း
-        url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
-        payload = {"chat_id": CHAT_ID, "text": f"{st.session_state.username}: {prompt}"}
-        requests.post(url, json=payload)
-        st.rerun()
-        if st.button("Video Call ခေါ်မည်"):
-            st.write(f"[ဒီမှာနှိပ်ပြီး ဝင်ပါ](https://meet.jit.si/zchat-{CHAT_ID})")
