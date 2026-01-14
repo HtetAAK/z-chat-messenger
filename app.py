@@ -3,105 +3,110 @@ from streamlit_gsheets import GSheetsConnection
 import pandas as pd
 import datetime
 import time
-import base64
 
 # --- PAGE SETUP ---
-st.set_page_config(page_title="Nebula Messenger", page_icon="🌌", layout="centered")
+st.set_page_config(page_title="Nebula Messenger", page_icon="🌌", layout="wide")
 
 # --- DATABASE CONNECTION ---
 SHEET_URL = "https://docs.google.com/spreadsheets/d/1aQvBwZ-ucJNlGNFiuS5ep60mvD5ezWzqOM2g0ZOH6S0/edit?usp=sharing"
 conn = st.connection("gsheets", type=GSheetsConnection)
 
-# --- ADVANCED CSS ---
+# --- CSS (ဘယ်/ညာ ခွဲခြားမှု ပိုကောင်းအောင် ပြင်ထားသည်) ---
 st.markdown("""
 <style>
     .stApp { background: #0f172a; color: white; }
-    .chat-container { display: flex; flex-direction: column; padding: 10px; }
-    .msg-box { display: flex; align-items: flex-end; margin-bottom: 15px; width: 100%; }
-    .sent { flex-direction: row-reverse; }
-    .received { flex-direction: row; }
-    
-    .profile-img { width: 35px; height: 35px; border-radius: 50%; margin: 0 10px; border: 2px solid #8A2BE2; }
-    
-    .bubble {
-        max-width: 65%; padding: 12px 16px; border-radius: 20px;
-        font-size: 14px; position: relative; box-shadow: 0 2px 5px rgba(0,0,0,0.2);
-    }
-    .sent .bubble { background: linear-gradient(135deg, #7c3aed, #4f46e5); color: white; border-bottom-right-radius: 4px; }
-    .received .bubble { background: #1e293b; color: #e2e8f0; border-bottom-left-radius: 4px; border: 1px solid #334155; }
-    
-    .timestamp { font-size: 9px; color: #64748b; margin-top: 4px; display: block; }
+    .msg-row { display: flex; width: 100%; margin-bottom: 12px; }
+    .sent { justify-content: flex-end; }
+    .received { justify-content: flex-start; }
+    .bubble { max-width: 70%; padding: 12px; border-radius: 18px; font-size: 14px; box-shadow: 0 2px 4px rgba(0,0,0,0.3); }
+    .sent .bubble { background: #7c3aed; color: white; border-bottom-right-radius: 2px; }
+    .received .bubble { background: #1e293b; color: white; border-bottom-left-radius: 2px; border: 1px solid #334155; }
+    .sender-tag { font-size: 10px; color: #94a3b8; margin-bottom: 3px; }
 </style>
 """, unsafe_allow_html=True)
 
-# --- IMAGE CONVERTER ---
-def to_b64(img_file):
-    return base64.b64encode(img_file.read()).decode() if img_file else ""
-
-# --- APP NAVIGATION ---
+# --- NAVIGATION ---
 if "user" not in st.session_state:
-    st.title("🌌 Welcome to Nebula")
-    if st.button("Login"):
-        st.session_state.user = "pending" # ခဏပြောင်းထားခြင်း
-        st.rerun()
+    st.info("အကောင့်ပြန်ဝင်ပေးပါခင်ဗျာ။")
     st.stop()
 
-# --- CHAT ROOM ---
-st.title("💬 Global Chat")
+if "chat_mode" not in st.session_state:
+    st.session_state.chat_mode = "Global"
 
-# Sidebar: Profile & Logout
+# --- SIDEBAR (Friends List) ---
 with st.sidebar:
-    st.subheader("👤 Your Profile")
-    st.write(f"Name: **{st.session_state.user['display_name']}**")
-    new_pf = st.file_uploader("Change Profile Pic", type=['jpg','png'])
-    if st.button("Save Profile"):
-        # Profile Update logic (Optional: နောက်မှထည့်မည်)
-        st.success("Profile Updated!")
-    if st.button("Logout"):
+    st.title("🌌 Nebula")
+    st.write(f"Logged in: **{st.session_state.user['display_name']}**")
+    st.divider()
+    
+    if st.button("🌐 Global Chat Room", use_container_width=True):
+        st.session_state.chat_mode = "Global"
+        st.rerun()
+    
+    st.subheader("👥 Online Users")
+    all_users = conn.read(spreadsheet=SHEET_URL, worksheet="Sheet1", ttl=0)
+    for _, user in all_users.iterrows():
+        if user['display_name'] != st.session_state.user['display_name']:
+            if st.button(f"💬 {user['display_name']}", key=user['username'], use_container_width=True):
+                st.session_state.chat_mode = "Private"
+                st.session_state.chat_with = user['display_name']
+                st.rerun()
+    
+    st.divider()
+    if st.button("🚪 Logout"):
         del st.session_state.user
         st.rerun()
 
-# စာဖတ်ခြင်း
+# --- CHAT INTERFACE ---
+if st.session_state.chat_mode == "Global":
+    st.subheader("🌐 Global Chat Room")
+    ws = "Sheet2"
+    filter_logic = None
+else:
+    st.subheader(f"💬 Private Chat with {st.session_state.chat_with}")
+    ws = "Sheet3"
+
+# Data ဖတ်ခြင်း
 try:
-    msgs = conn.read(spreadsheet=SHEET_URL, worksheet="Sheet2", ttl=0).fillna("")
-    # User Profile ပုံတွေပါ သိအောင် Sheet1 နဲ့ ချိတ်ဖတ်မည်
-    users_df = conn.read(spreadsheet=SHEET_URL, worksheet="Sheet1", ttl=0).fillna("")
+    df = conn.read(spreadsheet=SHEET_URL, worksheet=ws, ttl=0).fillna("")
+    if st.session_state.chat_mode == "Private":
+        # မိမိ ပို့ထားသောစာ နှင့် မိမိဆီ ပို့ထားသောစာများကိုသာ စစ်ထုတ်မည်
+        me = st.session_state.user['display_name']
+        other = st.session_state.chat_with
+        df = df[((df['sender'] == me) & (df['receiver'] == other)) | 
+                ((df['sender'] == other) & (df['receiver'] == me))]
 except:
-    msgs = pd.DataFrame(columns=["sender", "message", "timestamp", "image_url"])
+    df = pd.DataFrame()
 
 # စာများပြသခြင်း
-st.markdown('<div class="chat-container">', unsafe_allow_html=True)
-for _, row in msgs.tail(15).iterrows():
-    is_me = str(row['sender']) == str(st.session_state.user['display_name'])
-    align = "sent" if is_me else "received"
-    
-    # Profile ပုံ ရှာခြင်း
-    u_info = users_df[users_df['display_name'] == row['sender']]
-    pf_img = u_info.iloc[0]['profile_pic'] if not u_info.empty and u_info.iloc[0]['profile_pic'] else ""
-    pf_src = f"data:image/png;base64,{pf_img}" if pf_img else "https://www.w3schools.com/howto/img_avatar.png"
-
-    st.markdown(f'''
-        <div class="msg-box {align}">
-            <img src="{pf_src}" class="profile-img">
-            <div class="bubble">
-                <div style="font-weight:bold; font-size:11px; margin-bottom:3px; color:#a78bfa;">{row['sender']}</div>
-                {row['message']}
-                <span class="timestamp">{row['timestamp']}</span>
+chat_box = st.container()
+with chat_box:
+    for _, row in df.tail(20).iterrows():
+        is_me = row['sender'] == st.session_state.user['display_name']
+        cls = "sent" if is_me else "received"
+        st.markdown(f'''
+            <div class="msg-row {cls}">
+                <div>
+                    <div class="sender-tag">{row['sender']}</div>
+                    <div class="bubble">{row['message']}</div>
+                </div>
             </div>
-        </div>
-    ''', unsafe_allow_html=True)
-st.markdown('</div>', unsafe_allow_html=True)
+        ''', unsafe_allow_html=True)
 
 # စာပို့ခြင်း
-msg_input = st.chat_input("Type something...")
-if msg_input:
-    new_data = pd.DataFrame([{
+msg = st.chat_input("စာရိုက်ပါ...")
+if msg:
+    new_data = {
         "sender": st.session_state.user['display_name'],
-        "message": msg_input,
-        "timestamp": datetime.datetime.now().strftime("%I:%M %p"),
-        "image_url": ""
-    }])
-    conn.update(spreadsheet=SHEET_URL, worksheet="Sheet2", data=pd.concat([msgs, new_data], ignore_index=True))
+        "message": msg,
+        "timestamp": datetime.datetime.now().strftime("%I:%M %p")
+    }
+    if st.session_state.chat_mode == "Private":
+        new_data["receiver"] = st.session_state.chat_with
+    
+    full_df = conn.read(spreadsheet=SHEET_URL, worksheet=ws, ttl=0)
+    updated_df = pd.concat([full_df, pd.DataFrame([new_data])], ignore_index=True)
+    conn.update(spreadsheet=SHEET_URL, worksheet=ws, data=updated_df)
     st.rerun()
 
 time.sleep(5)
