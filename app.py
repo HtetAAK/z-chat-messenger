@@ -5,7 +5,7 @@ import datetime
 import time
 
 # --- PAGE SETUP ---
-st.set_page_config(page_title="Nebula Chat", page_icon="🌌", layout="wide")
+st.set_page_config(page_title="Nebula Messenger", page_icon="🌌", layout="wide")
 
 # --- DATABASE CONNECTION ---
 SHEET_URL = "https://docs.google.com/spreadsheets/d/1aQvBwZ-ucJNlGNFiuS5ep60mvD5ezWzqOM2g0ZOH6S0/edit?usp=sharing"
@@ -25,7 +25,7 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-# --- INITIAL STATE ---
+# --- SESSION CHECK ---
 if "user" not in st.session_state:
     st.info("Login အရင်ဝင်ပေးပါခင်ဗျာ။")
     st.stop()
@@ -33,65 +33,56 @@ if "user" not in st.session_state:
 if "chat_mode" not in st.session_state:
     st.session_state.chat_mode = "Global"
 
-# --- SIDEBAR (User List Fix) ---
+# --- SIDEBAR ---
 with st.sidebar:
     st.title("🌌 Nebula")
     st.write(f"Logged in: **{st.session_state.user['display_name']}**")
+    st.divider()
     
-    if st.button("🌐 Global Chat", use_container_width=True):
+    if st.button("🌐 Global Chat Room", use_container_width=True):
         st.session_state.chat_mode = "Global"
         st.rerun()
     
     st.subheader("👥 Online Users")
     try:
-        # Sheet1 မှ user list ကို ဖတ်သည်
-        users_df = conn.read(spreadsheet=SHEET_URL, worksheet="Sheet1", ttl=0).fillna("")
+        # Sheet1 မှ user အားလုံးကို ဖတ်သည်
+        users_df = conn.read(spreadsheet=SHEET_URL, worksheet="Sheet1", ttl=0).dropna(subset=['display_name'])
         
-        # User list ကို ပေါ်လာအောင် လုပ်ခြင်း
-        if not users_df.empty:
-            for _, u in users_df.iterrows():
-                # ကိုယ့်နာမည်ကိုယ် ပြန်မပြရန်
-                if str(u['display_name']) != str(st.session_state.user['display_name']):
-                    if st.button(f"💬 {u['display_name']}", key=f"user_{u['username']}", use_container_width=True):
-                        st.session_state.chat_mode = "Private"
-                        st.session_state.chat_with = u['display_name']
-                        st.rerun()
-        else:
-            st.write("အကောင့်ဖွင့်ထားသူ မရှိသေးပါ။")
+        for _, u in users_df.iterrows():
+            u_name = str(u['display_name']).strip()
+            my_name = str(st.session_state.user['display_name']).strip()
+            
+            # ကိုယ့်နာမည်ကိုယ် ပြန်မပြရန်
+            if u_name != my_name:
+                if st.button(f"💬 {u_name}", key=f"btn_{u['username']}", use_container_width=True):
+                    st.session_state.chat_mode = "Private"
+                    st.session_state.chat_with = u_name
+                    st.rerun()
     except Exception as e:
         st.error(f"User list error: {e}")
 
-# --- CHAT LOGIC ---
+# --- CHAT ROOM LOGIC ---
 ws_name = "Sheet2" if st.session_state.chat_mode == "Global" else "Sheet3"
 st.subheader("🌐 Global Chat" if st.session_state.chat_mode == "Global" else f"💬 Chat with {st.session_state.chat_with}")
 
 try:
-    # စာဖတ်ခြင်း
     df = conn.read(spreadsheet=SHEET_URL, worksheet=ws_name, ttl=0).fillna("")
     
     if st.session_state.chat_mode == "Private":
-        me = st.session_state.user['display_name']
-        other = st.session_state.chat_with
-        # Private chat စစ်ထုတ်ခြင်း
-        display_df = df[((df['sender'] == me) & (df['receiver'] == other)) | 
-                        ((df['sender'] == other) & (df['receiver'] == me))]
+        me = str(st.session_state.user['display_name']).strip()
+        other = str(st.session_state.chat_with).strip()
+        display_df = df[((df['sender'].astype(str) == me) & (df['receiver'].astype(str) == other)) | 
+                        ((df['sender'].astype(str) == other) & (df['receiver'].astype(str) == me))]
     else:
         display_df = df.tail(20)
 
-    # ပြသခြင်း
+    # စာများပြသခြင်း
     for _, row in display_df.iterrows():
         is_me = str(row['sender']) == str(st.session_state.user['display_name'])
         cls = "sent" if is_me else "received"
-        st.markdown(f'''
-            <div class="msg-row {cls}">
-                <div>
-                    <div class="sender-tag">{row["sender"]}</div>
-                    <div class="bubble">{row["message"]}</div>
-                </div>
-            </div>
-        ''', unsafe_allow_html=True)
+        st.markdown(f'<div class="msg-row {cls}"><div><div class="sender-tag">{row["sender"]}</div><div class="bubble">{row["message"]}</div></div></div>', unsafe_allow_html=True)
 except Exception as e:
-    st.error(f"Error: {e}")
+    st.error(f"Display Error: {e}")
 
 # --- SEND MESSAGE ---
 msg = st.chat_input("စာရိုက်ပါ...")
@@ -105,8 +96,9 @@ if msg:
         if st.session_state.chat_mode == "Private":
             new_row["receiver"] = st.session_state.chat_with
             
-        # Data Update လုပ်ခြင်း
-        updated_df = pd.concat([df, pd.DataFrame([new_row])], ignore_index=True)
+        # Sheet အသစ်ဖတ်ပြီးမှ update လုပ်ခြင်း (Conflict လျော့စေရန်)
+        current_all = conn.read(spreadsheet=SHEET_URL, worksheet=ws_name, ttl=0)
+        updated_df = pd.concat([current_all, pd.DataFrame([new_row])], ignore_index=True)
         conn.update(spreadsheet=SHEET_URL, worksheet=ws_name, data=updated_df)
         st.rerun()
     except Exception as e:
